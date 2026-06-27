@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <title><?= appTitle ?></title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+
+  <!-- ===================== LOADING OVERLAY ===================== -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loader-ring"></div>
+    <p id="loadingText">Memuat data…</p>
+  </div>
+
+  <!-- ===================== TOAST ===================== -->
+  <div id="toast" class="toast"></div>
+
+  <!-- ===================== HALAMAN AUTH TIM ===================== -->
+  <section id="page-auth" class="page page-auth">
+    <div class="auth-bg"></div>
+    <div class="auth-card glass">
+      <div class="brand">
+        <div class="brand-logo">
+          <span class="px px1"></span><span class="px px2"></span>
+          <span class="px px3"></span><span class="px px4"></span>
+        </div>
+        <div class="brand-text">
+          <h1>Koperasi Dashboard</h1>
+          <p>Verifikasi tim bertugas hari ini</p>
+        </div>
+      </div>
+
+      <div class="auth-date" id="authDate">—</div>
+
+      <div class="field">
+        <label>Siapa yang menginput data hari ini?</label>
+        <input type="text" id="inputOperator" list="dlAnggota" placeholder="Nama penginput (operator)" autocomplete="off">
+        <small class="hint">Nama ini otomatis tergabung dalam tim hari ini.</small>
+      </div>
+
+      <div class="field">
+        <label>Tim Koperasi hari ini</label>
+        <div class="chip-input" id="chipInput">
+          <input type="text" id="inputAnggota" list="dlAnggota" placeholder="Ketik nama lalu Enter…" autocomplete="off">
+        </div>
+        <small class="hint">Tambahkan anggota lain yang bertugas. Tekan Enter untuk menambah.</small>
+      </div>
+
+      <datalist id="dlAnggota"></datalist>
+
+      <button class="btn btn-primary btn-block" id="btnMulaiSesi">
+        <span>Masuk Dashboard</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ===================== APP SHELL ===================== -->
+  <div id="app-shell" class="app-shell hidden">
+
+    <!-- Topbar -->
+    <header class="topbar glass">
+      <div class="topbar-left">
+        <div class="brand-logo sm">
+          <span class="px px1"></span><span class="px px2"></span>
+          <span class="px px3"></span><span class="px px4"></span>
+        </div>
+        <div>
+          <strong>Koperasi Dashboard</strong>
+          <div class="topbar-date" id="topbarDate">—</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="team-pill" id="teamPill" title="Tim hari ini">
+          <span class="dot"></span>
+          <span id="teamOperator">—</span>
+          <span class="team-count" id="teamCount">0</span>
+        </div>
+        <input type="date" id="globalDate" class="date-picker">
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main class="main">
+
+      <!-- ============ DASHBOARD ============ -->
+      <section id="view-dashboard" class="view active">
+        <div class="view-head">
+          <h2>Dashboard</h2>
+          <p id="dashSub">Ringkasan operasional hari ini</p>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-card glass accent-cyan">
+            <div class="stat-ico">💰</div>
+            <div class="stat-body">
+              <span class="stat-label">Total Penjualan</span>
+              <strong class="stat-value" id="statPenjualan">Rp0</strong>
+            </div>
+          </div>
+          <div class="stat-card glass accent-violet">
+            <div class="stat-ico">📦</div>
+            <div class="stat-body">
+              <span class="stat-label">Total Modal (HPP)</span>
+              <strong class="stat-value" id="statModal">Rp0</strong>
+            </div>
+          </div>
+          <div class="stat-card glass accent-blue">
+            <div class="stat-ico">📈</div>
+            <div class="stat-body">
+              <span class="stat-label">Laba / Rugi</span>
+              <strong class="stat-value" id="statLaba">Rp0</strong>
+            </div>
+          </div>
+          <div class="stat-card glass accent-amber">
+            <div class="stat-ico">🧾</div>
+            <div class="stat-body">
+              <span class="stat-label">Total Belanja</span>
+              <strong class="stat-value" id="statBelanja">Rp0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel glass">
+            <div class="panel-head">
+              <h3>Distribusi per Fase</h3>
+            </div>
+            <div class="bars" id="barsFase"></div>
+          </div>
+
+          <div class="panel glass">
+            <div class="panel-head">
+              <h3>Status Pembayaran</h3>
+            </div>
+            <div class="paylist" id="payList"></div>
+          </div>
+        </div>
+
+        <div class="panel glass">
+          <div class="panel-head">
+            <h3>⚠️ Stok Kritis</h3>
+            <button class="btn btn-ghost btn-sm" onclick="App.goto('stok')">Kelola Stok</button>
+          </div>
+          <div class="kritis-list" id="kritisList"></div>
+        </div>
+      </section>
+
+      <!-- ============ TRANSAKSI ============ -->
+      <section id="view-transaksi" class="view">
+        <div class="view-head">
+          <h2>Transaksi Harian</h2>
+          <p>Input distribusi bahan ke setiap fase / kelompok</p>
+        </div>
+
+        <div class="toolbar glass">
+          <div class="cat-filter" id="catFilter"></div>
+          <div class="search-box">
+            <input type="text" id="searchBahan" placeholder="🔍 Cari bahan atau kode…">
+          </div>
+        </div>
+
+        <div class="table-wrap glass">
+          <table class="trx-table" id="trxTable">
+            <thead id="trxHead"></thead>
+            <tbody id="trxBody"></tbody>
+          </table>
+        </div>
+
+        <div class="trx-footer glass" id="trxFooter">
+          <div class="trx-footer-fases" id="footerFases"></div>
+          <div class="trx-footer-total">
+            <span>Grand Total</span>
+            <strong id="footerGrand">Rp0</strong>
+            <button class="btn btn-primary" id="btnSimpanTrx">💾 Simpan Laporan</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ STOK ============ -->
+      <section id="view-stok" class="view">
+        <div class="view-head">
+          <h2>Manajemen Stok</h2>
+          <p>Stok realtime dengan carry-over otomatis</p>
+        </div>
+
+        <div class="toolbar glass">
+          <div class="cat-filter" id="catFilterStok"></div>
+          <div class="search-box">
+            <input type="text" id="searchStok" placeholder="🔍 Cari bahan…">
+          </div>
+          <button class="btn btn-primary btn-sm" id="btnTambahBahan">+ Bahan Baru</button>
+        </div>
+
+        <div class="stok-grid" id="stokGrid"></div>
+      </section>
+
+      <!-- ============ LAPORAN ============ -->
+      <section id="view-laporan" class="view">
+        <div class="view-head">
+          <h2>Laporan &amp; Rekap</h2>
+          <p>Ringkasan finansial dan ekspor format lama</p>
+        </div>
+
+        <div class="panel glass">
+          <div class="panel-head">
+            <h3>Ringkasan Finansial Harian</h3>
+            <button class="btn btn-primary btn-sm" id="btnGenerateLaporan">🖨️ Buat Laporan Format Lama</button>
+          </div>
+          <div class="finance-grid" id="financeGrid"></div>
+        </div>
+
+        <div class="panel glass">
+          <div class="panel-head">
+            <h3>Rekap 7 Hari Terakhir</h3>
+          </div>
+          <div class="bars" id="weeklyBars"></div>
+          <div class="weekly-total" id="weeklyTotal"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Nav -->
+    <nav class="bottom-nav glass">
+      <button class="nav-btn active" data-view="dashboard"><span>🏠</span>Beranda</button>
+      <button class="nav-btn" data-view="transaksi"><span>📝</span>Transaksi</button>
+      <button class="nav-btn" data-view="stok"><span>📦</span>Stok</button>
+      <button class="nav-btn" data-view="laporan"><span>📊</span>Laporan</button>
+    </nav>
+  </div>
+
+  <!-- ===================== MODAL: Stok Masuk ===================== -->
+  <div id="modalStok" class="modal-backdrop hidden">
+    <div class="modal glass">
+      <div class="modal-head">
+        <h3 id="modalStokTitle">Tambah Stok</h3>
+        <button class="modal-close" data-close>&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>Bahan</label><div id="modalStokBahan" class="readonly-field">—</div></div>
+        <div class="field"><label>Stok Awal (carry-over)</label>
+          <input type="number" id="modalStokAwal" step="0.01"></div>
+        <div class="field"><label>Jumlah Masuk Hari Ini</label>
+          <input type="number" id="modalStokMasuk" step="0.01" placeholder="0"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close>Batal</button>
+        <button class="btn btn-primary" id="btnSimpanStok">Simpan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: Bahan Baru ===================== -->
+  <div id="modalBahan" class="modal-backdrop hidden">
+    <div class="modal glass">
+      <div class="modal-head">
+        <h3>Bahan Baru</h3>
+        <button class="modal-close" data-close>&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>Nama Bahan</label><input type="text" id="bahanNama"></div>
+        <div class="field"><label>Kategori</label><select id="bahanKategori"></select></div>
+        <div class="field"><label>Satuan</label><input type="text" id="bahanSatuan" placeholder="kg, liter, ekor…"></div>
+        <div class="field"><label>Harga Beli</label><input type="number" id="bahanHargaBeli" placeholder="0"></div>
+        <div class="field"><label>Harga Jual</label><input type="number" id="bahanHargaJual" placeholder="0"></div>
+        <div class="field"><label>Stok Minimum (alert)</label><input type="number" id="bahanStokMin" step="0.01" placeholder="0"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close>Batal</button>
+        <button class="btn btn-primary" id="btnSimpanBahan">Simpan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: Pembayaran ===================== -->
+  <div id="modalBayar" class="modal-backdrop hidden">
+    <div class="modal glass">
+      <div class="modal-head">
+        <h3>Catat Pembayaran</h3>
+        <button class="modal-close" data-close>&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>Fase</label><div id="bayarFase" class="readonly-field">—</div></div>
+        <div class="field"><label>Total Belanja</label><div id="bayarTotal" class="readonly-field">Rp0</div></div>
+        <div class="field"><label>Jumlah Dibayar</label><input type="number" id="bayarDibayar" placeholder="0"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close>Batal</button>
+        <button class="btn btn-primary" id="btnSimpanBayar">Simpan</button>
+      </div>
+    </div>
+  </div>
+
+  <?!= include('Script'); ?>
+</body>
+</html>

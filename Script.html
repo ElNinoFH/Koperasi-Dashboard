@@ -1,0 +1,654 @@
+<script>
+/* ============================================================
+   KOPERASI DASHBOARD — Client App
+   Menghubungkan UI dengan backend Apps Script via google.script.run
+   ============================================================ */
+var App = (function () {
+
+  // ---------- STATE ----------
+  var state = {
+    today: null,
+    tanggal: null,
+    sesi: null,          // { operator, anggota[] }
+    anggotaTetap: [],
+    fase: [],
+    kategori: [],
+    operatorChips: [],   // anggota tim yang sedang dipilih di halaman auth
+    matriks: null,       // data transaksi terkini
+    filterKat: 'Semua',
+    searchTrx: '',
+    filterKatStok: 'Semua',
+    searchStok: '',
+    dirty: {}            // kode bahan yang berubah & belum disimpan
+  };
+
+  // ---------- UTIL ----------
+  function $(id) { return document.getElementById(id); }
+  function el(sel, root) { return (root || document).querySelector(sel); }
+  function rupiah(n) {
+    n = Math.round(Number(n) || 0);
+    var neg = n < 0; n = Math.abs(n);
+    var s = 'Rp' + n.toLocaleString('id-ID');
+    return neg ? '-' + s : s;
+  }
+  function num(n) {
+    n = Number(n) || 0;
+    return n.toLocaleString('id-ID', { maximumFractionDigits: 2 });
+  }
+  function loading(show, text) {
+    $('loadingText').textContent = text || 'Memuat data…';
+    $('loadingOverlay').classList.toggle('hidden', !show);
+  }
+  var _toastT;
+  function toast(msg, type) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (type || '');
+    clearTimeout(_toastT);
+    _toastT = setTimeout(function () { t.className = 'toast'; }, 3000);
+  }
+  function run(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(function (err) { reject(err); })[fn]
+        .apply(google.script.run, args);
+    });
+  }
+
+  // ============================================================
+  //  INISIALISASI
+  // ============================================================
+  function init() {
+    loading(true, 'Menyiapkan aplikasi…');
+    run('getInitState').then(function (st) {
+      state.today = st.today;
+      state.tanggal = st.today;
+      state.fase = st.fase;
+      state.kategori = st.kategori;
+      state.anggotaTetap = st.anggotaTetap || [];
+
+      $('authDate').textContent = st.todayLabel;
+      fillDatalist();
+      bindGlobalEvents();
+
+      if (st.sesiHariIni) {
+        state.sesi = st.sesiHariIni;
+        enterApp();
+      } else {
+        loading(false);
+        showAuth();
+      }
+    }).catch(function (e) {
+      loading(false);
+      toast('Gagal memuat: ' + (e.message || e), 'err');
+    });
+  }
+
+  function fillDatalist() {
+    var dl = $('dlAnggota');
+    dl.innerHTML = state.anggotaTetap.map(function (n) {
+      return '<option value="' + esc(n) + '">';
+    }).join('');
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // ============================================================
+  //  HALAMAN AUTH TIM
+  // ============================================================
+  function showAuth() {
+    $('page-auth').classList.remove('hidden');
+    $('app-shell').classList.add('hidden');
+  }
+
+  function renderChips() {
+    var box = $('chipInput');
+    // hapus chip lama, sisakan input
+    box.querySelectorAll('.chip').forEach(function (c) { c.remove(); });
+    var input = $('inputAnggota');
+    var operator = ($('inputOperator').value || '').trim();
+
+    state.operatorChips.forEach(function (nama, idx) {
+      var chip = document.createElement('span');
+      var isOp = operator && nama.toLowerCase() === operator.toLowerCase();
+      chip.className = 'chip' + (isOp ? ' is-operator' : '');
+      chip.innerHTML = esc(nama) + (isOp ? ' <small>(operator)</small>' : '') +
+        ' <button type="button" data-idx="' + idx + '">&times;</button>';
+      box.insertBefore(chip, input);
+    });
+  }
+
+  function addChip(nama) {
+    nama = (nama || '').trim();
+    if (!nama) return;
+    var exists = state.operatorChips.some(function (n) { return n.toLowerCase() === nama.toLowerCase(); });
+    if (!exists) state.operatorChips.push(nama);
+    renderChips();
+  }
+
+  function syncOperatorChip() {
+    var operator = ($('inputOperator').value || '').trim();
+    if (operator) {
+      var exists = state.operatorChips.some(function (n) { return n.toLowerCase() === operator.toLowerCase(); });
+      if (!exists) state.operatorChips.unshift(operator);
+    }
+    renderChips();
+  }
+
+  function mulaiSesi() {
+    var operator = ($('inputOperator').value || '').trim();
+    if (!operator) { toast('Isi nama penginput data dulu', 'err'); $('inputOperator').focus(); return; }
+    syncOperatorChip();
+
+    loading(true, 'Menyimpan sesi tim…');
+    run('mulaiSesiTim', { tanggal: state.tanggal, operator: operator, anggota: state.operatorChips })
+      .then(function (sesi) {
+        state.sesi = sesi;
+        enterApp();
+      }).catch(function (e) {
+        loading(false);
+        toast('Gagal: ' + (e.message || e), 'err');
+      });
+  }
+
+  // ============================================================
+  //  MASUK APLIKASI
+  // ============================================================
+  function enterApp() {
+    $('page-auth').classList.add('hidden');
+    $('app-shell').classList.remove('hidden');
+
+    $('topbarDate').textContent = state.sesi.tanggalLabel || '';
+    $('teamOperator').textContent = state.sesi.operator;
+    $('teamCount').textContent = state.sesi.anggota.length;
+    $('globalDate').value = state.tanggal;
+
+    buildCategoryFilters();
+    fillKategoriSelect();
+    loadDashboard();
+  }
+
+  function buildCategoryFilters() {
+    var cats = ['Semua'].concat(state.kategori);
+    function build(containerId, activeKey, onClick) {
+      var c = $(containerId);
+      c.innerHTML = cats.map(function (k) {
+        return '<span class="cat-chip' + (k === state[activeKey] ? ' active' : '') +
+          '" data-cat="' + esc(k) + '">' + esc(k) + '</span>';
+      }).join('');
+      c.querySelectorAll('.cat-chip').forEach(function (chip) {
+        chip.onclick = function () { onClick(chip.getAttribute('data-cat')); };
+      });
+    }
+    build('catFilter', 'filterKat', function (k) { state.filterKat = k; buildCategoryFilters(); renderTrxTable(); });
+    build('catFilterStok', 'filterKatStok', function (k) { state.filterKatStok = k; buildCategoryFilters(); renderStok(); });
+  }
+
+  function fillKategoriSelect() {
+    $('bahanKategori').innerHTML = state.kategori.map(function (k) {
+      return '<option value="' + esc(k) + '">' + esc(k) + '</option>';
+    }).join('');
+  }
+
+  // ---------- NAVIGASI ----------
+  function goto(view) {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    $('view-' + view).classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-view') === view);
+    });
+    if (view === 'dashboard') loadDashboard();
+    if (view === 'transaksi') loadTransaksi();
+    if (view === 'stok') loadStok();
+    if (view === 'laporan') loadLaporan();
+  }
+
+  // ============================================================
+  //  DASHBOARD
+  // ============================================================
+  function loadDashboard() {
+    loading(true, 'Memuat dashboard…');
+    Promise.all([
+      run('getRekapHarian', state.tanggal),
+      run('getStokKritis', state.tanggal)
+    ]).then(function (res) {
+      var rekap = res[0], kritis = res[1];
+      renderDashboard(rekap, kritis);
+      loading(false);
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  function renderDashboard(rekap, kritis) {
+    $('dashSub').textContent = 'Ringkasan • ' + rekap.tanggalLabel;
+    $('statPenjualan').textContent = rupiah(rekap.totalPenjualan);
+    $('statModal').textContent = rupiah(rekap.totalModal);
+    $('statBelanja').textContent = rupiah(rekap.totalBelanja);
+    var laba = $('statLaba');
+    laba.textContent = rupiah(rekap.keuntungan);
+    laba.className = 'stat-value ' + (rekap.keuntungan < 0 ? 'neg' : 'pos');
+
+    // Bars per fase
+    var max = 1;
+    state.fase.forEach(function (f) { max = Math.max(max, rekap.perFase[f].totalBulat); });
+    $('barsFase').innerHTML = state.fase.map(function (f) {
+      var v = rekap.perFase[f].totalBulat;
+      var pct = Math.round(v / max * 100);
+      return '<div class="bar-row"><span class="bar-label">' + esc(f) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+        '<span class="bar-val">' + rupiah(v) + '</span></div>';
+    }).join('');
+
+    // Payment list
+    if (!rekap.pembayaran.length) {
+      $('payList').innerHTML = '<div class="empty-state">Belum ada belanja hari ini.</div>';
+    } else {
+      $('payList').innerHTML = rekap.pembayaran.map(function (p) {
+        var cls = p.status === 'Lunas' ? 'lunas' : (p.status === 'Kurang' ? 'kurang' : 'belum');
+        return '<div class="pay-row" data-fase="' + esc(p.fase) + '" data-total="' + p.totalBelanja + '">' +
+          '<div><div class="pay-fase">' + esc(p.fase) + '</div>' +
+          '<div class="pay-amt">' + rupiah(p.dibayar) + ' / ' + rupiah(p.totalBelanja) + '</div></div>' +
+          '<span class="badge ' + cls + '">' + esc(p.status) + '</span></div>';
+      }).join('');
+      $('payList').querySelectorAll('.pay-row').forEach(function (row) {
+        row.onclick = function () {
+          openBayar(row.getAttribute('data-fase'), Number(row.getAttribute('data-total')));
+        };
+      });
+    }
+
+    // Kritis
+    if (!kritis.length) {
+      $('kritisList').innerHTML = '<div class="empty-state">✅ Semua stok dalam kondisi aman.</div>';
+    } else {
+      $('kritisList').innerHTML = kritis.map(function (b) {
+        var warn = !b.habis;
+        return '<div class="kritis-item ' + (warn ? 'warn' : '') + '">' +
+          '<div class="kn">' + esc(b.nama) + '</div>' +
+          '<div class="ks">Sisa ' + num(b.stokAkhir) + ' ' + esc(b.satuan) +
+          (b.habis ? ' • HABIS' : ' • menipis') + '</div></div>';
+      }).join('');
+    }
+  }
+
+  // ============================================================
+  //  TRANSAKSI
+  // ============================================================
+  function loadTransaksi() {
+    loading(true, 'Memuat data transaksi…');
+    run('getMatriksDistribusi', state.tanggal).then(function (m) {
+      state.matriks = m;
+      state.dirty = {};
+      renderTrxHead();
+      renderTrxTable();
+      renderTrxFooter(m.ringkasan);
+      loading(false);
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  function renderTrxHead() {
+    var h = '<tr><th>Kode</th><th>Nama Bahan</th><th>Stok</th><th>Harga</th>';
+    state.fase.forEach(function (f) { h += '<th class="fase-col">' + esc(f) + '</th>'; });
+    h += '</tr>';
+    $('trxHead').innerHTML = h;
+  }
+
+  function filteredBahan() {
+    var q = state.searchTrx.toLowerCase();
+    return state.matriks.bahan.filter(function (b) {
+      if (state.filterKat !== 'Semua' && b.kategori !== state.filterKat) return false;
+      if (q && b.nama.toLowerCase().indexOf(q) < 0 && b.kode.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function renderTrxTable() {
+    if (!state.matriks) return;
+    var bahan = filteredBahan();
+    var rows = '';
+    var lastKat = null;
+    bahan.forEach(function (b) {
+      if (b.kategori !== lastKat) {
+        rows += '<tr class="kat-row"><td colspan="' + (4 + state.fase.length) + '">' + esc(b.kategori) + '</td></tr>';
+        lastKat = b.kategori;
+      }
+      var tersedia = b.stokAwal + b.masuk;
+      var over = b.totalKeluar > tersedia;
+      var cls = (b.totalKeluar === 0 ? 'row-empty' : '') + (over ? ' row-over' : '');
+      rows += '<tr class="' + cls + '" data-kode="' + esc(b.kode) + '">' +
+        '<td class="cell-kode">' + esc(b.kode) + '</td>' +
+        '<td class="cell-nama">' + esc(b.nama) + '</td>' +
+        '<td class="cell-stok">' + num(tersedia) + ' ' + esc(b.satuan) + '</td>' +
+        '<td class="cell-stok">' + rupiah(b.hargaSatuan) + '</td>';
+      state.fase.forEach(function (f) {
+        var val = b.distribusi[f] || 0;
+        rows += '<td><input type="number" class="fase-input' + (val > 0 ? ' filled' : '') +
+          '" data-kode="' + esc(b.kode) + '" data-fase="' + esc(f) + '" ' +
+          'value="' + (val > 0 ? val : '') + '" step="0.01" min="0" placeholder="0"></td>';
+      });
+      rows += '</tr>';
+    });
+    if (!bahan.length) rows = '<tr><td colspan="' + (4 + state.fase.length) + '" class="empty-state">Tidak ada bahan.</td></tr>';
+    $('trxBody').innerHTML = rows;
+
+    $('trxBody').querySelectorAll('.fase-input').forEach(function (inp) {
+      inp.oninput = function () { onFaseInput(inp); };
+    });
+  }
+
+  function onFaseInput(inp) {
+    var kode = inp.getAttribute('data-kode');
+    var fase = inp.getAttribute('data-fase');
+    var val = parseFloat(inp.value) || 0;
+    var bahan = state.matriks.bahan.find(function (b) { return b.kode === kode; });
+    if (!bahan) return;
+    bahan.distribusi[fase] = val;
+    inp.classList.toggle('filled', val > 0);
+    // recompute totalKeluar
+    bahan.totalKeluar = state.fase.reduce(function (s, f) { return s + (bahan.distribusi[f] || 0); }, 0);
+    state.dirty[kode] = bahan.distribusi;
+
+    // tandai overdraw pada baris
+    var tr = inp.closest('tr');
+    var tersedia = bahan.stokAwal + bahan.masuk;
+    tr.classList.toggle('row-over', bahan.totalKeluar > tersedia);
+
+    recomputeFooter();
+  }
+
+  function recomputeFooter() {
+    var perFase = {}; var grand = 0;
+    state.fase.forEach(function (f) { perFase[f] = 0; });
+    state.matriks.bahan.forEach(function (b) {
+      state.fase.forEach(function (f) {
+        var h = (b.distribusi[f] || 0) * b.hargaSatuan;
+        perFase[f] += h; grand += h;
+      });
+    });
+    var ringkasan = { perFase: {}, grandTotalBulat: 0 };
+    state.fase.forEach(function (f) {
+      var bulat = Math.round(perFase[f] / 1000) * 1000;
+      ringkasan.perFase[f] = { totalBulat: bulat };
+      ringkasan.grandTotalBulat += bulat;
+    });
+    renderTrxFooter(ringkasan);
+  }
+
+  function renderTrxFooter(ringkasan) {
+    $('footerFases').innerHTML = state.fase.map(function (f) {
+      var v = ringkasan.perFase[f].totalBulat;
+      if (v <= 0) return '';
+      return '<span class="footer-fase">' + esc(f) + '<b>' + rupiah(v) + '</b></span>';
+    }).join('');
+    $('footerGrand').textContent = rupiah(ringkasan.grandTotalBulat);
+  }
+
+  function simpanTransaksi() {
+    var items = Object.keys(state.dirty).map(function (kode) {
+      return { kode: kode, distribusi: state.dirty[kode] };
+    });
+    if (!items.length) { toast('Tidak ada perubahan untuk disimpan'); return; }
+
+    loading(true, 'Menyimpan ' + items.length + ' bahan…');
+    run('simpanDistribusiBatch', { tanggal: state.tanggal, items: items, operator: state.sesi.operator })
+      .then(function (m) {
+        state.matriks = m;
+        state.dirty = {};
+        renderTrxTable();
+        renderTrxFooter(m.ringkasan);
+        loading(false);
+        toast('Tersimpan ✓', 'ok');
+      }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  // ============================================================
+  //  STOK
+  // ============================================================
+  function loadStok() {
+    loading(true, 'Memuat stok…');
+    run('getSnapshotStok', state.tanggal).then(function (list) {
+      state.stok = list;
+      renderStok();
+      loading(false);
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  function renderStok() {
+    if (!state.stok) return;
+    var q = state.searchStok.toLowerCase();
+    var list = state.stok.filter(function (b) {
+      if (state.filterKatStok !== 'Semua' && b.kategori !== state.filterKatStok) return false;
+      if (q && b.nama.toLowerCase().indexOf(q) < 0 && b.kode.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    if (!list.length) { $('stokGrid').innerHTML = '<div class="empty-state">Tidak ada bahan.</div>'; return; }
+
+    $('stokGrid').innerHTML = list.map(function (b) {
+      var tersedia = b.stokAwal + b.masuk;
+      var pct = tersedia > 0 ? Math.min(100, Math.round(b.stokAkhir / tersedia * 100)) : 0;
+      var kritis = b.kritis || b.habis;
+      return '<div class="stok-card" data-kode="' + esc(b.kode) + '">' +
+        '<div class="sc-head"><div><div class="sc-kode">' + esc(b.kode) + '</div>' +
+        '<div class="sc-nama">' + esc(b.nama) + '</div>' +
+        '<div class="sc-cat">' + esc(b.kategori) + '</div></div>' +
+        '<div style="text-align:right"><span class="sc-stok">' + num(b.stokAkhir) + '</span>' +
+        '<div class="sc-unit">' + esc(b.satuan) + '</div></div></div>' +
+        '<div class="sc-bar' + (kritis ? ' kritis' : '') + '"><div style="width:' + pct + '%"></div></div>' +
+        '<div class="sc-meta"><span>Awal ' + num(b.stokAwal) + ' • Masuk ' + num(b.masuk) + '</span>' +
+        '<span>Keluar ' + num(b.keluar) + '</span></div></div>';
+    }).join('');
+
+    $('stokGrid').querySelectorAll('.stok-card').forEach(function (c) {
+      c.onclick = function () { openStok(c.getAttribute('data-kode')); };
+    });
+  }
+
+  // ============================================================
+  //  LAPORAN
+  // ============================================================
+  function loadLaporan() {
+    loading(true, 'Memuat laporan…');
+    Promise.all([
+      run('getRekapHarian', state.tanggal),
+      run('getRekapMingguan', state.tanggal, 7)
+    ]).then(function (res) {
+      renderFinance(res[0]);
+      renderWeekly(res[1]);
+      loading(false);
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  function renderFinance(r) {
+    var items = [
+      ['Total Penjualan', rupiah(r.totalPenjualan), ''],
+      ['Total Modal (HPP)', rupiah(r.totalModal), ''],
+      ['Laba / Rugi', rupiah(r.keuntungan), r.keuntungan < 0 ? 'neg' : 'pos'],
+      ['Total Belanja', rupiah(r.totalBelanja), ''],
+      ['Sudah Dibayar', rupiah(r.totalDibayar), ''],
+      ['Kekurangan', rupiah(r.totalKekurangan), r.totalKekurangan > 0 ? 'neg' : 'pos']
+    ];
+    $('financeGrid').innerHTML = items.map(function (it) {
+      return '<div class="fin-item"><div class="fl">' + it[0] + '</div>' +
+        '<div class="fv ' + it[2] + '">' + it[1] + '</div></div>';
+    }).join('');
+  }
+
+  function renderWeekly(w) {
+    var max = 1;
+    w.harian.forEach(function (d) { max = Math.max(max, d.belanja, d.penjualan); });
+    $('weeklyBars').innerHTML = w.harian.map(function (d) {
+      var pct = Math.round(d.belanja / max * 100);
+      return '<div class="bar-row"><span class="bar-label">' + esc(d.label) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+        '<span class="bar-val">' + rupiah(d.belanja) + '</span></div>';
+    }).join('');
+    $('weeklyTotal').innerHTML =
+      '<div><span>Total Penjualan</span><strong>' + rupiah(w.totalPenjualan) + '</strong></div>' +
+      '<div><span>Total Modal</span><strong>' + rupiah(w.totalModal) + '</strong></div>' +
+      '<div><span>Laba / Rugi</span><strong class="' + (w.totalKeuntungan < 0 ? 'neg' : 'pos') +
+      '" style="color:' + (w.totalKeuntungan < 0 ? 'var(--danger)' : 'var(--success)') + '">' +
+      rupiah(w.totalKeuntungan) + '</strong></div>';
+  }
+
+  function generateLaporan() {
+    loading(true, 'Membuat laporan format lama…');
+    run('generateLaporanFormatLama', state.tanggal).then(function (res) {
+      loading(false);
+      toast('Laporan "' + res.sheetName + '" dibuat ✓', 'ok');
+      window.open(res.url, '_blank');
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  // ============================================================
+  //  MODALS
+  // ============================================================
+  function openModal(id) { $(id).classList.remove('hidden'); }
+  function closeModal(id) { $(id).classList.add('hidden'); }
+
+  var _stokKode = null;
+  function openStok(kode) {
+    var b = state.stok.find(function (x) { return x.kode === kode; });
+    if (!b) return;
+    _stokKode = kode;
+    $('modalStokTitle').textContent = 'Stok: ' + b.nama;
+    $('modalStokBahan').textContent = b.kode + ' • ' + b.nama + ' (' + b.satuan + ')';
+    $('modalStokAwal').value = b.stokAwal;
+    $('modalStokMasuk').value = b.masuk || '';
+    openModal('modalStok');
+  }
+  function simpanStok() {
+    loading(true, 'Menyimpan stok…');
+    run('inputStokMasuk', {
+      tanggal: state.tanggal, kode: _stokKode,
+      masuk: parseFloat($('modalStokMasuk').value) || 0,
+      stokAwalOverride: parseFloat($('modalStokAwal').value) || 0,
+      operator: state.sesi.operator
+    }).then(function (list) {
+      state.stok = list;
+      renderStok();
+      closeModal('modalStok');
+      loading(false);
+      toast('Stok diperbarui ✓', 'ok');
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  function simpanBahan() {
+    var data = {
+      nama: $('bahanNama').value, kategori: $('bahanKategori').value,
+      satuan: $('bahanSatuan').value, hargaBeli: parseFloat($('bahanHargaBeli').value) || 0,
+      hargaJual: parseFloat($('bahanHargaJual').value) || 0, stokMin: parseFloat($('bahanStokMin').value) || 0
+    };
+    if (!data.nama.trim()) { toast('Nama bahan wajib diisi', 'err'); return; }
+    loading(true, 'Menambah bahan…');
+    run('tambahBahan', data).then(function () {
+      ['bahanNama', 'bahanSatuan', 'bahanHargaBeli', 'bahanHargaJual', 'bahanStokMin'].forEach(function (id) { $(id).value = ''; });
+      closeModal('modalBahan');
+      loadStok();
+      toast('Bahan ditambahkan ✓', 'ok');
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  var _bayarFase = null;
+  function openBayar(fase, total) {
+    _bayarFase = fase;
+    $('bayarFase').textContent = fase;
+    $('bayarTotal').textContent = rupiah(total);
+    $('bayarDibayar').value = total;
+    openModal('modalBayar');
+  }
+  function simpanBayar() {
+    loading(true, 'Menyimpan pembayaran…');
+    run('catatPembayaran', {
+      tanggal: state.tanggal, fase: _bayarFase,
+      dibayar: parseFloat($('bayarDibayar').value) || 0
+    }).then(function () {
+      closeModal('modalBayar');
+      loadDashboard();
+      toast('Pembayaran dicatat ✓', 'ok');
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  // ============================================================
+  //  GANTI TANGGAL
+  // ============================================================
+  function gantiTanggal(tgl) {
+    if (!tgl) return;
+    state.tanggal = tgl;
+    loading(true, 'Memuat tanggal…');
+    run('getSesiTim', tgl).then(function (sesi) {
+      if (sesi) {
+        state.sesi = sesi;
+        $('teamOperator').textContent = sesi.operator;
+        $('teamCount').textContent = sesi.anggota.length;
+        $('topbarDate').textContent = sesi.tanggalLabel;
+      } else {
+        $('topbarDate').textContent = '(belum ada sesi tim)';
+      }
+      var active = el('.nav-btn.active');
+      goto(active ? active.getAttribute('data-view') : 'dashboard');
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  // ============================================================
+  //  EVENT BINDING
+  // ============================================================
+  function bindGlobalEvents() {
+    // ---- Auth page ----
+    $('inputOperator').addEventListener('change', syncOperatorChip);
+    $('inputOperator').addEventListener('blur', syncOperatorChip);
+    $('inputAnggota').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addChip(this.value); this.value = ''; }
+    });
+    $('chipInput').addEventListener('click', function (e) {
+      if (e.target.tagName === 'BUTTON') {
+        var idx = parseInt(e.target.getAttribute('data-idx'), 10);
+        state.operatorChips.splice(idx, 1);
+        renderChips();
+      } else { $('inputAnggota').focus(); }
+    });
+    $('btnMulaiSesi').addEventListener('click', mulaiSesi);
+
+    // ---- Nav ----
+    document.querySelectorAll('.nav-btn').forEach(function (b) {
+      b.addEventListener('click', function () { goto(b.getAttribute('data-view')); });
+    });
+    $('globalDate').addEventListener('change', function () { gantiTanggal(this.value); });
+
+    // ---- Transaksi ----
+    $('searchBahan').addEventListener('input', function () { state.searchTrx = this.value; renderTrxTable(); });
+    $('btnSimpanTrx').addEventListener('click', simpanTransaksi);
+
+    // ---- Stok ----
+    $('searchStok').addEventListener('input', function () { state.searchStok = this.value; renderStok(); });
+    $('btnTambahBahan').addEventListener('click', function () { openModal('modalBahan'); });
+    $('btnSimpanStok').addEventListener('click', simpanStok);
+    $('btnSimpanBahan').addEventListener('click', simpanBahan);
+
+    // ---- Bayar ----
+    $('btnSimpanBayar').addEventListener('click', simpanBayar);
+
+    // ---- Laporan ----
+    $('btnGenerateLaporan').addEventListener('click', generateLaporan);
+
+    // ---- Modal close ----
+    document.querySelectorAll('[data-close]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var m = b.closest('.modal-backdrop'); if (m) m.classList.add('hidden');
+      });
+    });
+    document.querySelectorAll('.modal-backdrop').forEach(function (m) {
+      m.addEventListener('click', function (e) { if (e.target === m) m.classList.add('hidden'); });
+    });
+  }
+
+  // ---------- PUBLIC ----------
+  return { init: init, goto: goto };
+})();
+
+window.addEventListener('DOMContentLoaded', App.init);
+</script>
