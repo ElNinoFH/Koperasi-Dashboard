@@ -61,6 +61,27 @@ var App = (function () {
   //  INISIALISASI
   // ============================================================
   function init() {
+    // Bind semua event handler PERTAMA, sebelum async call apapun.
+    // Ini memastikan tombol selalu bisa diklik walau API lambat / error.
+    bindGlobalEvents();
+
+    // Cek apakah berjalan di luar konteks Apps Script (mis. buka HTML langsung).
+    if (typeof google === 'undefined' || !google.script) {
+      loading(false);
+      $('authDate').textContent = '⚠️ Mode Preview — sambungkan ke Apps Script';
+      state.fase = ['Fase PS','Fase A','Fase B','Fase C','SFS',
+                    'Makan Malam','Sarapan PJ','Guru','IPAK'];
+      state.kategori = ['Karbohidrat','Protein','Sayuran','Buah','Bumbu Dapur'];
+      state.today = new Date().toISOString().slice(0,10);
+      state.tanggal = state.today;
+      fillDatalist();
+      buildCategoryFilters();
+      fillKategoriSelect();
+      showAuth();
+      toast('Buka via URL Web App Apps Script untuk mode penuh', 'err');
+      return;
+    }
+
     loading(true, 'Menyiapkan aplikasi…');
     run('getInitState').then(function (st) {
       state.today = st.today;
@@ -71,7 +92,6 @@ var App = (function () {
 
       $('authDate').textContent = st.todayLabel;
       fillDatalist();
-      bindGlobalEvents();
 
       if (st.sesiHariIni) {
         state.sesi = st.sesiHariIni;
@@ -82,6 +102,7 @@ var App = (function () {
       }
     }).catch(function (e) {
       loading(false);
+      showAuth();
       toast('Gagal memuat: ' + (e.message || e), 'err');
     });
   }
@@ -145,6 +166,18 @@ var App = (function () {
     var operator = ($('inputOperator').value || '').trim();
     if (!operator) { toast('Isi nama penginput data dulu', 'err'); $('inputOperator').focus(); return; }
     syncOperatorChip();
+
+    // Mode preview (tanpa Apps Script): langsung masuk dengan data lokal.
+    if (typeof google === 'undefined' || !google.script) {
+      state.sesi = {
+        tanggal: state.tanggal,
+        tanggalLabel: 'Mode Preview',
+        operator: operator,
+        anggota: state.operatorChips.slice()
+      };
+      enterApp();
+      return;
+    }
 
     loading(true, 'Menyimpan sesi tim…');
     run('mulaiSesiTim', { tanggal: state.tanggal, operator: operator, anggota: state.operatorChips })
@@ -213,6 +246,15 @@ var App = (function () {
   //  DASHBOARD
   // ============================================================
   function loadDashboard() {
+    if (typeof google === 'undefined' || !google.script) {
+      renderDashboard({
+        tanggalLabel: 'Mode Preview', totalPenjualan: 0, totalModal: 0,
+        totalBelanja: 0, keuntungan: 0, totalDibayar: 0, totalKekurangan: 0,
+        perFase: state.fase.reduce(function(o,f){o[f]={totalBulat:0};return o;},{}),
+        pembayaran: [], jumlahTransaksi: 0
+      }, []);
+      return;
+    }
     loading(true, 'Memuat dashboard…');
     Promise.all([
       run('getRekapHarian', state.tanggal),
