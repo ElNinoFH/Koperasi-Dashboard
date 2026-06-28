@@ -50,10 +50,15 @@ var App = (function () {
   function run(fn) {
     var args = Array.prototype.slice.call(arguments, 1);
     return new Promise(function (resolve, reject) {
-      google.script.run
+      var runner = google.script.run
         .withSuccessHandler(resolve)
-        .withFailureHandler(function (err) { reject(err); })[fn]
-        .apply(google.script.run, args);
+        .withFailureHandler(function (err) { reject(err); });
+      if (typeof runner[fn] !== 'function') {
+        reject(new Error('Fungsi "' + fn + '" tidak ditemukan — pastikan Code.gs terbaru sudah di-copy & di-Deploy ulang.'));
+        return;
+      }
+      // Gunakan runner (bukan google.script.run) agar handler ikut terbawa
+      runner[fn].apply(runner, args);
     });
   }
 
