@@ -83,10 +83,45 @@ function include(filename) {
 // ====================== HELPER SPREADSHEET ======================
 
 /**
- * Mengembalikan Spreadsheet aktif (file tempat script ini terpasang).
+ * Mengembalikan Spreadsheet yang dipakai sebagai database.
+ *
+ * Urutan prioritas:
+ *  1. Spreadsheet aktif  — kalau script di-bind ke Sheets (container-bound)
+ *  2. ID tersimpan       — kalau sudah pernah dibuat sebelumnya (standalone)
+ *  3. Buat baru          — pertama kali dijalankan sebagai standalone
  */
 function getSpreadsheet() {
-  return SpreadsheetApp.getActiveSpreadsheet();
+  // 1. Container-bound: ada spreadsheet aktif
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) return active;
+
+  // 2. Standalone: cek apakah ID sudah pernah disimpan
+  const props = PropertiesService.getScriptProperties();
+  const savedId = props.getProperty('DB_SPREADSHEET_ID');
+  if (savedId) {
+    try {
+      return SpreadsheetApp.openById(savedId);
+    } catch (e) {
+      // ID tidak valid — lanjut buat baru
+    }
+  }
+
+  // 3. Buat spreadsheet baru dan simpan ID-nya untuk dipakai selamanya
+  const ss = SpreadsheetApp.create('Koperasi Dashboard — Database');
+  props.setProperty('DB_SPREADSHEET_ID', ss.getId());
+
+  // Pindahkan ke folder yang sama dengan script (opsional, biar rapi)
+  try {
+    const scriptFile = DriveApp.getFileById(ScriptApp.getScriptId());
+    const parents = scriptFile.getParents();
+    if (parents.hasNext()) {
+      const folder = parents.next();
+      DriveApp.getFileById(ss.getId()).moveTo(folder);
+    }
+  } catch (e) { /* tidak kritis */ }
+
+  Logger.log('Spreadsheet baru dibuat: ' + ss.getUrl());
+  return ss;
 }
 
 /**
