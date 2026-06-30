@@ -50,12 +50,14 @@ function include(filename) {
 //  BAGIAN 3: HELPER SPREADSHEET & UTILITAS
 // ============================================================
 
+var _ssRef = null;
 function getSpreadsheet() {
+  if (_ssRef) return _ssRef;                       // memoize per-eksekusi (hindari openById berulang)
   const active = SpreadsheetApp.getActiveSpreadsheet();
-  if (active) return active;
+  if (active) { _ssRef = active; return _ssRef; }
   const props   = PropertiesService.getScriptProperties();
   const savedId = props.getProperty('DB_SPREADSHEET_ID');
-  if (savedId) { try { return SpreadsheetApp.openById(savedId); } catch(e){} }
+  if (savedId) { try { _ssRef = SpreadsheetApp.openById(savedId); return _ssRef; } catch(e){} }
   const ss = SpreadsheetApp.create('Koperasi Dashboard — Database');
   props.setProperty('DB_SPREADSHEET_ID', ss.getId());
   try {
@@ -63,12 +65,17 @@ function getSpreadsheet() {
     if (f.hasNext()) DriveApp.getFileById(ss.getId()).moveTo(f.next());
   } catch(e){}
   Logger.log('Spreadsheet baru: ' + ss.getUrl());
-  return ss;
+  _ssRef = ss;
+  return _ssRef;
 }
 
+// Memoize juga objek Sheet agar getSheetByName tidak dipanggil berulang.
+var _sheetRefs = {};
 function getSheet(name) {
+  if (_sheetRefs[name]) return _sheetRefs[name];
   const s = getSpreadsheet().getSheetByName(name);
   if (!s) throw new Error('Sheet "'+name+'" belum ada — jalankan setupDatabase() dulu.');
+  _sheetRefs[name] = s;
   return s;
 }
 

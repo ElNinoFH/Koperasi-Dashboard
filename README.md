@@ -74,9 +74,9 @@ Keuntungan      = Total Penjualan − Total Modal
 ### 1. Siapkan Spreadsheet & Project
 1. Buat Google Spreadsheet baru (ini akan menjadi database).
 2. Menu **Extensions → Apps Script**.
-3. Salin semua file `.gs` dan `.html` dari repo ini ke project Apps Script:
-   - `Code.gs`, `Setup.gs`, `Auth.gs`, `MasterBahan.gs`, `Stok.gs`, `Transaksi.gs`, `Laporan.gs`
-   - `Index.html`, `Styles.html`, `Script.html`
+3. Salin file dari repo ini ke project Apps Script (hanya 2 file):
+   - `Code.gs` — seluruh backend
+   - `Index.html` — seluruh frontend (HTML + CSS + JS)
    - Salin juga isi `appsscript.json` (aktifkan **Project Settings → Show "appsscript.json"**).
 
 ### 2. Inisialisasi Database
@@ -135,16 +135,8 @@ Lalu jalankan `setupDatabase` & buat deployment dari editor.
 ```
 Koperasi-Dashboard/
 ├── appsscript.json      # Manifest (timezone, webapp config)
-├── Code.gs              # Router doGet, konstanta global, helper
-├── Setup.gs             # Inisialisasi DB + seed master bahan
-├── Auth.gs              # Sesi tim harian (operator + anggota)
-├── MasterBahan.gs       # CRUD master bahan
-├── Stok.gs              # Logic stok harian + carry-over
-├── Transaksi.gs         # Distribusi per fase + kalkulasi
-├── Laporan.gs           # Pembayaran, rekap, generate format lama
-├── Index.html           # Struktur SPA
-├── Styles.html          # Tema ungu-cyan futuristik
-└── Script.html          # Client-side logic
+├── Code.gs              # SELURUH backend (setup, auth, stok, transaksi, laporan)
+└── Index.html           # SELURUH frontend (HTML + CSS + JS dalam 1 file)
 ```
 
 ---
