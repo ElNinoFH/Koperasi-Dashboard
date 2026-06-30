@@ -261,12 +261,8 @@ var App = (function () {
       return;
     }
     loading(true, 'Memuat dashboard…');
-    Promise.all([
-      run('getRekapHarian', state.tanggal),
-      run('getStokKritis', state.tanggal)
-    ]).then(function (res) {
-      var rekap = res[0], kritis = res[1];
-      renderDashboard(rekap, kritis);
+    run('getDashboardData', state.tanggal).then(function (res) {
+      renderDashboard(res.rekap, res.kritis);
       loading(false);
     }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
   }
@@ -621,6 +617,48 @@ var App = (function () {
   }
 
   // ============================================================
+  //  BUKA SESI LAMA
+  // ============================================================
+  function bukaSesiLama() {
+    if (typeof google === 'undefined' || !google.script) {
+      toast('Fitur ini perlu koneksi ke Apps Script', 'err'); return;
+    }
+    openModal('modalSesi');
+    $('sesiList').innerHTML = '<div class="empty-state">Memuat…</div>';
+    run('getDaftarSesi').then(function (list) {
+      if (!list.length) {
+        $('sesiList').innerHTML = '<div class="empty-state">Belum ada sesi yang tersimpan.</div>';
+        return;
+      }
+      $('sesiList').innerHTML = list.map(function (s) {
+        return '<div class="sesi-item" data-tgl="' + esc(s.tanggal) + '">' +
+          '<div class="sesi-main"><div class="sesi-tgl">' + esc(s.tanggalLabel) + '</div>' +
+          '<div class="sesi-op">👤 ' + esc(s.operator) +
+          ' <span class="sesi-count">' + s.jumlahAnggota + ' anggota</span></div>' +
+          '<div class="sesi-anggota">' + esc(s.anggota.join(', ')) + '</div></div>' +
+          '<span class="sesi-go">Buka →</span></div>';
+      }).join('');
+      $('sesiList').querySelectorAll('.sesi-item').forEach(function (it) {
+        it.onclick = function () { pilihSesiLama(it.getAttribute('data-tgl')); };
+      });
+    }).catch(function (e) {
+      $('sesiList').innerHTML = '<div class="empty-state">Gagal memuat: ' + esc(e.message || e) + '</div>';
+    });
+  }
+
+  function pilihSesiLama(tgl) {
+    loading(true, 'Membuka sesi…');
+    run('getSesiTim', tgl).then(function (sesi) {
+      if (!sesi) { loading(false); toast('Sesi tidak ditemukan', 'err'); return; }
+      state.sesi = sesi;
+      state.tanggal = tgl;
+      closeModal('modalSesi');
+      $('globalDate').value = tgl;
+      enterApp();
+    }).catch(function (e) { loading(false); toast('Gagal: ' + (e.message || e), 'err'); });
+  }
+
+  // ============================================================
   //  GANTI TANGGAL
   // ============================================================
   function gantiTanggal(tgl) {
@@ -659,6 +697,7 @@ var App = (function () {
       } else { $('inputAnggota').focus(); }
     });
     $('btnMulaiSesi').addEventListener('click', mulaiSesi);
+    $('btnBukaSesiLama').addEventListener('click', bukaSesiLama);
 
     // ---- Nav ----
     document.querySelectorAll('.nav-btn').forEach(function (b) {

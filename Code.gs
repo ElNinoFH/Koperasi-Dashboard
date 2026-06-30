@@ -72,10 +72,18 @@ function getSheet(name) {
   return s;
 }
 
+// Cache baca-sheet per-eksekusi (1 request web app = 1 eksekusi baru).
+// Sangat mengurangi pembacaan berulang sheet yang sama.
+var _sheetCache = {};
+function invalidateCache(name) {
+  if (name) { delete _sheetCache[name]; } else { _sheetCache = {}; }
+}
+
 function readSheetAsObjects(name) {
+  if (_sheetCache[name]) return _sheetCache[name];
   const sheet = getSheet(name);
   const vals  = sheet.getDataRange().getValues();
-  if (vals.length < 2) return [];
+  if (vals.length < 2) { _sheetCache[name] = []; return []; }
   const hdrs = vals[0];
   const rows = [];
   for (let i = 1; i < vals.length; i++) {
@@ -83,6 +91,7 @@ function readSheetAsObjects(name) {
     hdrs.forEach(function(h,j){ obj[h]=vals[i][j]; if(vals[i][j]!==''&&vals[i][j]!==null) empty=false; });
     if (!empty) { obj._row = i+1; rows.push(obj); }
   }
+  _sheetCache[name] = rows;
   return rows;
 }
 
@@ -147,8 +156,8 @@ function seedMasterBahan() {
 
 function setConfig(key,val) {
   const s=getSheet(SHEETS.CONFIG), d=s.getDataRange().getValues();
-  for(let i=1;i<d.length;i++){ if(d[i][0]===key){ s.getRange(i+1,2).setValue(val); return; } }
-  s.appendRow([key,val]);
+  for(let i=1;i<d.length;i++){ if(d[i][0]===key){ s.getRange(i+1,2).setValue(val); invalidateCache(SHEETS.CONFIG); return; } }
+  s.appendRow([key,val]); invalidateCache(SHEETS.CONFIG);
 }
 function getConfig(key) {
   const d=getSheet(SHEETS.CONFIG).getDataRange().getValues();
@@ -292,6 +301,7 @@ function tambahBahan(data) {
   const hb=Number(data.hargaBeli)||0, hj=Number(data.hargaJual)||hb;
   getSheet(SHEETS.MASTER).appendRow([kode,String(data.nama).trim(),data.kategori,
     data.satuan||'',hb,hj,Number(data.stokMin)||0,true]);
+  invalidateCache(SHEETS.MASTER); _bahanCache=null;
   SpreadsheetApp.flush();
   return getBahanByKode(kode);
 }
@@ -307,6 +317,7 @@ function updateBahan(data) {
   s.getRange(r,6).setValue(data.hargaJual!=null?Number(data.hargaJual):b.hargaJual);
   s.getRange(r,7).setValue(data.stokMin!=null?Number(data.stokMin):b.stokMin);
   if(data.aktif!=null) s.getRange(r,8).setValue(!!data.aktif);
+  invalidateCache(SHEETS.MASTER); _bahanCache=null;
   SpreadsheetApp.flush();
   return getBahanByKode(data.kode);
 }
@@ -338,6 +349,22 @@ function getStokAkhirSebelum(kode,tanggal) {
   return Number(rows[0].StokAkhir)||0;
 }
 
+// Bangun peta carry-over (StokAkhir terakhir sebelum tgl) untuk SEMUA bahan
+// dalam SATU kali baca sheet — menggantikan pemanggilan getStokAkhirSebelum per-bahan.
+function buildCarryOverMap(tgl) {
+  const latest = {}; // kode -> { tanggal, stokAkhir }
+  readSheetAsObjects(SHEETS.STOK).forEach(function(r){
+    const d = formatDate(r.Tanggal);
+    if (d < tgl) {
+      const cur = latest[r.KodeBarang];
+      if (!cur || d > cur.tanggal) {
+        latest[r.KodeBarang] = { tanggal:d, stokAkhir:Number(r.StokAkhir)||0 };
+      }
+    }
+  });
+  return latest;
+}
+
 function getStokMapByTanggal(tanggal) {
   const tgl=formatDate(tanggal), map={};
   readSheetAsObjects(SHEETS.STOK).filter(function(r){return formatDate(r.Tanggal)===tgl;})
@@ -347,10 +374,12 @@ function getStokMapByTanggal(tanggal) {
 
 function getSnapshotStok(tanggal) {
   const tgl=formatDate(tanggal||new Date());
-  const stokMap=getStokMapByTanggal(tgl), keluarMap=getTotalKeluarByTanggal(tgl);
+  const stokMap=getStokMapByTanggal(tgl);
+  const keluarMap=getTotalKeluarByTanggal(tgl);
+  const carry=buildCarryOverMap(tgl); // satu pass, bukan per-bahan
   return getMasterBahan(true).map(function(b){
     const rec=stokMap[b.kode];
-    const stokAwal=rec?Number(rec.StokAwal)||0:getStokAkhirSebelum(b.kode,tgl);
+    const stokAwal=rec?Number(rec.StokAwal)||0:(carry[b.kode]?carry[b.kode].stokAkhir:0);
     const masuk=rec?Number(rec.Masuk)||0:0;
     const keluar=keluarMap[b.kode]||0, stokAkhir=stokAwal+masuk-keluar;
     return { kode:b.kode, nama:b.nama, kategori:b.kategori, satuan:b.satuan,
@@ -375,6 +404,7 @@ function inputStokMasuk(data) {
     sheet.appendRow([tgl,bahan.kode,bahan.nama,bahan.kategori,bahan.satuan,sa,masuk,0,sa+masuk,op,now]);
   }
   rekalkulasiStok(tgl); SpreadsheetApp.flush();
+  invalidateCache(SHEETS.STOK);
   return getSnapshotStok(tgl);
 }
 
@@ -388,6 +418,7 @@ function rekalkulasiStok(tanggal) {
       sheet.getRange(i+1,9).setValue((Number(data[i][5])||0)+(Number(data[i][6])||0)-keluar);
     }
   }
+  invalidateCache(SHEETS.STOK);
 }
 
 function getStokKritis(tanggal) {
@@ -444,15 +475,37 @@ function simpanDistribusiBahan(data) {
       bahan.satuan,f,j,bahan.hargaBeli,j*bahan.hargaBeli,op,now]);
   });
   if(baris.length) sheet.getRange(sheet.getLastRow()+1,1,baris.length,HEADERS.Transaksi.length).setValues(baris);
+  invalidateCache(SHEETS.TRANSAKSI);
   rekalkulasiStok(tgl); hitungUlangPembayaran(tgl); SpreadsheetApp.flush();
   return { kode:data.kode, ringkasan:hitungRingkasanFase(tgl) };
 }
 
 function simpanDistribusiBatch(data) {
   const tgl=formatDate(data.tanggal||new Date());
-  (data.items||[]).forEach(function(it){
-    simpanDistribusiBahan({tanggal:tgl,kode:it.kode,distribusi:it.distribusi,operator:data.operator});
+  const sheet=getSheet(SHEETS.TRANSAKSI);
+  const items=data.items||[], op=data.operator||'', now=new Date();
+  // Bangun set kode yang diubah & validasi bahan sekali di awal.
+  const kodeSet={}; items.forEach(function(it){kodeSet[it.kode]=true;});
+  // Hapus semua baris lama (kode terkait) untuk tanggal ini dalam satu lintasan.
+  const vals=sheet.getDataRange().getValues();
+  for(let i=vals.length-1;i>=1;i--){
+    if(formatDate(vals[i][1])===tgl && kodeSet[vals[i][2]]) sheet.deleteRow(i+1);
+  }
+  // Susun semua baris baru lalu tulis sekaligus (1 write, jauh lebih cepat).
+  const baris=[];
+  items.forEach(function(it){
+    const bahan=getBahanByKode(it.kode);
+    if(!bahan) return;
+    const dist=it.distribusi||{};
+    FASE_LIST.forEach(function(f){
+      const j=Number(dist[f])||0;
+      if(j>0) baris.push([generateId('TRX'),tgl,bahan.kode,bahan.nama,bahan.kategori,
+        bahan.satuan,f,j,bahan.hargaBeli,j*bahan.hargaBeli,op,now]);
+    });
   });
+  if(baris.length) sheet.getRange(sheet.getLastRow()+1,1,baris.length,HEADERS.Transaksi.length).setValues(baris);
+  invalidateCache(SHEETS.TRANSAKSI);
+  rekalkulasiStok(tgl); hitungUlangPembayaran(tgl); SpreadsheetApp.flush();
   return getMatriksDistribusi(tgl);
 }
 
@@ -476,28 +529,47 @@ function hitungRingkasanFase(tanggal) {
 function hitungUlangPembayaran(tanggal) {
   const tgl=formatDate(tanggal), ring=hitungRingkasanFase(tgl);
   const sheet=getSheet(SHEETS.PEMBAYARAN), rows=readSheetAsObjects(SHEETS.PEMBAYARAN), now=new Date();
+  let berubah=false;
   FASE_LIST.forEach(function(f){
     const tot=ring.perFase[f].totalBulat;
     const ex=rows.find(function(r){return formatDate(r.Tanggal)===tgl&&r.Fase===f;});
     if(ex){
       const dib=Number(ex.Dibayar)||0;
-      sheet.getRange(ex._row,3).setValue(tot);
-      sheet.getRange(ex._row,5).setValue(tot-dib);
-      sheet.getRange(ex._row,6).setValue(statusBayar(tot,dib));
-      sheet.getRange(ex._row,7).setValue(now);
-    } else if(tot>0) sheet.appendRow([tgl,f,tot,0,tot,'Belum Bayar',now]);
+      // Tulis hanya bila total berubah (hindari write yang tidak perlu).
+      if((Number(ex.TotalBelanja)||0)!==tot){
+        sheet.getRange(ex._row,3).setValue(tot);
+        sheet.getRange(ex._row,5).setValue(tot-dib);
+        sheet.getRange(ex._row,6).setValue(statusBayar(tot,dib));
+        sheet.getRange(ex._row,7).setValue(now);
+        berubah=true;
+      }
+    } else if(tot>0){ sheet.appendRow([tgl,f,tot,0,tot,'Belum Bayar',now]); berubah=true; }
   });
+  if(berubah) invalidateCache(SHEETS.PEMBAYARAN);
 }
 
 function statusBayar(tot,dib){ if(tot<=0)return '-'; if(dib>=tot)return 'Lunas'; if(dib>0)return 'Kurang'; return 'Belum Bayar'; }
 
+// READ-ONLY: hitung status pembayaran tanpa menulis ke sheet (cepat).
+// Menggabungkan total belanja terkini (dari Transaksi) dengan nilai
+// "Dibayar" yang tersimpan. Dipakai dashboard & laporan.
 function getPembayaran(tanggal) {
   const tgl=formatDate(tanggal);
-  hitungUlangPembayaran(tgl);
-  return readSheetAsObjects(SHEETS.PEMBAYARAN)
+  const ring=hitungRingkasanFase(tgl);
+  const bayarMap={};
+  readSheetAsObjects(SHEETS.PEMBAYARAN)
     .filter(function(r){return formatDate(r.Tanggal)===tgl;})
-    .map(function(r){return {fase:r.Fase,totalBelanja:Number(r.TotalBelanja)||0,
-      dibayar:Number(r.Dibayar)||0,sisa:Number(r.Sisa)||0,status:r.Status};});
+    .forEach(function(r){ bayarMap[r.Fase]=Number(r.Dibayar)||0; });
+  const hasil=[];
+  FASE_LIST.forEach(function(f){
+    const tot=ring.perFase[f].totalBulat;
+    const dib=bayarMap[f]||0;
+    if(tot>0 || dib>0){
+      hasil.push({ fase:f, totalBelanja:tot, dibayar:dib,
+        sisa:tot-dib, status:statusBayar(tot,dib) });
+    }
+  });
+  return hasil;
 }
 
 function catatPembayaran(data) {
@@ -505,12 +577,19 @@ function catatPembayaran(data) {
   hitungUlangPembayaran(tgl);
   const sheet=getSheet(SHEETS.PEMBAYARAN), rows=readSheetAsObjects(SHEETS.PEMBAYARAN);
   const ex=rows.find(function(r){return formatDate(r.Tanggal)===tgl&&r.Fase===data.fase;});
-  if(!ex) throw new Error('Belum ada belanja untuk fase '+data.fase);
-  const tot=Number(ex.TotalBelanja)||0, dib=Number(data.dibayar)||0;
-  sheet.getRange(ex._row,4).setValue(dib);
-  sheet.getRange(ex._row,5).setValue(tot-dib);
-  sheet.getRange(ex._row,6).setValue(statusBayar(tot,dib));
-  sheet.getRange(ex._row,7).setValue(new Date());
+  const dib=Number(data.dibayar)||0;
+  if(!ex){
+    // Buat baris bila belum ada (mis. dibayar di muka).
+    const ring=hitungRingkasanFase(tgl), tot=ring.perFase[data.fase]?ring.perFase[data.fase].totalBulat:0;
+    sheet.appendRow([tgl,data.fase,tot,dib,tot-dib,statusBayar(tot,dib),new Date()]);
+  } else {
+    const tot=Number(ex.TotalBelanja)||0;
+    sheet.getRange(ex._row,4).setValue(dib);
+    sheet.getRange(ex._row,5).setValue(tot-dib);
+    sheet.getRange(ex._row,6).setValue(statusBayar(tot,dib));
+    sheet.getRange(ex._row,7).setValue(new Date());
+  }
+  invalidateCache(SHEETS.PEMBAYARAN);
   SpreadsheetApp.flush();
   return getPembayaran(tgl);
 }
@@ -521,10 +600,18 @@ function getBahanByKodeCached(kode){
   return _bahanCache[kode]||null;
 }
 
-function getRekapHarian(tanggal) {
-  const tgl=formatDate(tanggal||new Date()), trx=getTransaksiByTanggal(tgl);
-  const ring=hitungRingkasanFase(tgl), pem=getPembayaran(tgl), snap=getSnapshotStok(tgl);
-  let totalModal=0; snap.forEach(function(b){totalModal+=(b.stokAwal+b.masuk)*b.hargaBeli;});
+// Endpoint GABUNGAN untuk dashboard: hitung snapshot stok SEKALI saja,
+// lalu turunkan rekap finansial + daftar stok kritis dari snapshot yang sama.
+// Mengganti 2 panggilan terpisah (getRekapHarian + getStokKritis).
+function getDashboardData(tanggal) {
+  const tgl=formatDate(tanggal||new Date());
+  const trx=getTransaksiByTanggal(tgl);
+  const ring=hitungRingkasanFase(tgl);
+  const pem=getPembayaran(tgl);
+  const snap=getSnapshotStok(tgl); // dihitung sekali
+
+  let totalModal=0;
+  snap.forEach(function(b){ totalModal+=(b.stokAwal+b.masuk)*b.hargaBeli; });
   let totalPenjualan=0;
   trx.forEach(function(t){
     const b=getBahanByKodeCached(t.KodeBarang);
@@ -532,9 +619,18 @@ function getRekapHarian(tanggal) {
   });
   const totalDibayar=pem.reduce(function(s,p){return s+p.dibayar;},0);
   const totalKekurangan=pem.reduce(function(s,p){return s+Math.max(0,p.sisa);},0);
-  return { tanggal:tgl, tanggalLabel:formatDateLabel(tgl), totalPenjualan, totalModal,
-    totalBelanja:ring.grandTotalBulat, keuntungan:totalPenjualan-totalModal,
-    totalDibayar, totalKekurangan, perFase:ring.perFase, pembayaran:pem, jumlahTransaksi:trx.length };
+  const kritis=snap.filter(function(b){return b.kritis||b.habis;});
+
+  return {
+    rekap: { tanggal:tgl, tanggalLabel:formatDateLabel(tgl), totalPenjualan, totalModal,
+      totalBelanja:ring.grandTotalBulat, keuntungan:totalPenjualan-totalModal,
+      totalDibayar, totalKekurangan, perFase:ring.perFase, pembayaran:pem, jumlahTransaksi:trx.length },
+    kritis: kritis
+  };
+}
+
+function getRekapHarian(tanggal) {
+  return getDashboardData(tanggal).rekap;
 }
 
 function getRekapMingguan(tanggalAkhir,jumlahHari) {
@@ -612,8 +708,22 @@ function mulaiSesiTim(data) {
   const ex=rows.find(function(r){return formatDate(r.Tanggal)===tanggal;});
   if(ex){sheet.getRange(ex._row,2).setValue(operator);sheet.getRange(ex._row,3).setValue(str);sheet.getRange(ex._row,5).setValue(now);}
   else sheet.appendRow([tanggal,operator,str,now,now]);
+  invalidateCache(SHEETS.SESI_TIM);
   perbaruiAnggotaTetap(anggota); SpreadsheetApp.flush();
   return getSesiTim(tanggal);
+}
+
+// Daftar seluruh sesi yang pernah dibuat (untuk fitur "Buka sesi lama").
+// Diurutkan dari yang terbaru. Mengembalikan tanggal, operator, jumlah anggota.
+function getDaftarSesi() {
+  const rows=readSheetAsObjects(SHEETS.SESI_TIM).map(function(r){
+    const tgl=formatDate(r.Tanggal);
+    const anggota=String(r.AnggotaTim||'').split(',').map(function(n){return n.trim();}).filter(function(n){return n!=='';});
+    return { tanggal:tgl, tanggalLabel:formatDateLabel(tgl), operator:r.Operator,
+      anggota:anggota, jumlahAnggota:anggota.length };
+  });
+  rows.sort(function(a,b){ return a.tanggal<b.tanggal?1:(a.tanggal>b.tanggal?-1:0); });
+  return rows;
 }
 
 function getSesiTim(tanggal) {
