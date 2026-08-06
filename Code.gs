@@ -122,6 +122,81 @@ function generateId(p)     { return (p||'ID')+'-'+Date.now()+'-'+Math.floor(Math
 
 
 // ============================================================
+//  BAGIAN 3B: GERBANG AKSES (PIN)
+// ============================================================
+//  Web app ini di-deploy dengan access "ANYONE_ANONYMOUS" (lihat
+//  appsscript.json) — artinya siapa pun yang tahu link bisa membuka
+//  aplikasi tanpa login Google. Gerbang PIN di bawah ini adalah lapisan
+//  keamanan APLIKASI (bukan Google Auth) supaya orang yang tidak tahu
+//  kode akses tidak bisa mencatat/mengubah data keuangan koperasi.
+//
+//  PIN disimpan di PropertiesService.getScriptProperties() — BUKAN
+//  di-hardcode di kode — supaya tetap aman meski repo GitHub ini publik
+//  (pola yang sama dipakai untuk DB_SPREADSHEET_ID di atas).
+//
+//  PIN DEFAULT ('1234') otomatis dibuat saat pertama kali dipakai jika
+//  belum pernah di-set. INI BUKAN PIN YANG AMAN UNTUK PRODUKSI.
+//  >>> WAJIB DIGANTI SEBELUM DIPAKAI MENCATAT DATA KEUANGAN SUNGGUHAN <<<
+//
+//  Cara ganti PIN:
+//   1. Buka aplikasi & masuk dengan PIN lama (default: 1234), ATAU
+//   2. Jalankan manual dari editor Apps Script (pilih fungsi
+//      changeAccessCode, isi parameter test, atau jalankan baris ini
+//      sekali lewat fungsi sementara):
+//        PropertiesService.getScriptProperties().setProperty('ACCESS_PIN','pinBaruAnda');
+// ============================================================
+
+var ACCESS_PIN_DEFAULT   = '1234';       // PIN awal — HANYA dipakai jika ACCESS_PIN belum pernah di-set
+var ACCESS_TOKEN_TTL_SEC = 6 * 60 * 60;  // sesi PIN (token) berlaku 6 jam di cache server
+
+// Ambil PIN aktif dari Script Properties. Jika belum pernah di-set,
+// otomatis diisi dengan ACCESS_PIN_DEFAULT (dan dicatat di log).
+function getAccessPin_() {
+  var props = PropertiesService.getScriptProperties();
+  var pin = props.getProperty('ACCESS_PIN');
+  if (!pin) {
+    pin = ACCESS_PIN_DEFAULT;
+    props.setProperty('ACCESS_PIN', pin);
+    Logger.log('PIN akses belum pernah di-set — memakai PIN DEFAULT "' + ACCESS_PIN_DEFAULT +
+      '". Segera ganti lewat changeAccessCode()!');
+  }
+  return String(pin);
+}
+
+// Dipanggil dari layar gerbang PIN paling awal di Index.html (sebelum
+// halaman verifikasi tim muncul). Mengembalikan token sesi (string) bila
+// PIN benar, atau null bila salah.
+function verifyAccessCode(inputPin) {
+  var cocok = String(inputPin || '').trim() === getAccessPin_();
+  if (!cocok) return null;
+  var token = Utilities.getUuid();
+  CacheService.getScriptCache().put('SESI_' + token, '1', ACCESS_TOKEN_TTL_SEC);
+  return token;
+}
+
+// Validasi token sesi PIN. Dipanggil di AWAL fungsi backend yang mengubah
+// data (tambahBahan, updateBahan, catatPembayaran, simpanDistribusiBatch,
+// inputStokMasuk, dst) — supaya perlindungan tidak hanya bergantung pada
+// gerbang PIN di frontend, yang bisa dilewati siapa pun yang membuka
+// console browser dan memanggil google.script.run langsung.
+function requireAccess_(token) {
+  var valid = token && CacheService.getScriptCache().get('SESI_' + token);
+  if (!valid) throw new Error('Sesi belum/tidak terverifikasi — masukkan kode akses lagi.');
+}
+
+// Ganti PIN akses. Wajib menyertakan token sesi yang SUDAH lolos
+// verifikasi (artinya pemanggil sudah membuktikan tahu PIN lama).
+// Analogi changePassword() pada project Kiro-AI.
+function changeAccessCode(token, newPin) {
+  requireAccess_(token);
+  newPin = String(newPin || '').trim();
+  if (newPin.length < 4) throw new Error('PIN baru minimal 4 karakter.');
+  PropertiesService.getScriptProperties().setProperty('ACCESS_PIN', newPin);
+  return true;
+}
+
+
+// ============================================================
 //  BAGIAN 4: SETUP DATABASE
 // ============================================================
 
@@ -301,6 +376,7 @@ function getBahanByKode(kode) {
 }
 
 function tambahBahan(data) {
+  requireAccess_(data && data.accessToken);
   if (!data.nama||!String(data.nama).trim()) throw new Error('Nama bahan wajib diisi.');
   if (!KATEGORI[data.kategori]) throw new Error('Kategori tidak valid.');
   let kode = data.kode&&String(data.kode).trim()||generateKodeBerikutnya(data.kategori);
@@ -314,6 +390,7 @@ function tambahBahan(data) {
 }
 
 function updateBahan(data) {
+  requireAccess_(data && data.accessToken);
   const b=getBahanByKode(data.kode);
   if(!b) throw new Error('Bahan "'+data.kode+'" tidak ditemukan.');
   const s=getSheet(SHEETS.MASTER), r=b.row;
@@ -329,7 +406,7 @@ function updateBahan(data) {
   return getBahanByKode(data.kode);
 }
 
-function nonaktifkanBahan(kode) { return updateBahan({kode:kode,aktif:false}); }
+function nonaktifkanBahan(token,kode) { return updateBahan({kode:kode,aktif:false,accessToken:token}); }
 
 function generateKodeBerikutnya(kategori) {
   const prefix=KATEGORI[kategori];
@@ -397,6 +474,7 @@ function getSnapshotStok(tanggal) {
 }
 
 function inputStokMasuk(data) {
+  requireAccess_(data && data.accessToken);
   const tgl=formatDate(data.tanggal||new Date()), bahan=getBahanByKode(data.kode);
   if(!bahan) throw new Error('Bahan tidak ditemukan: '+data.kode);
   const sheet=getSheet(SHEETS.STOK), rows=readSheetAsObjects(SHEETS.STOK);
@@ -469,6 +547,7 @@ function getMatriksDistribusi(tanggal) {
 }
 
 function simpanDistribusiBahan(data) {
+  requireAccess_(data && data.accessToken);
   const tgl=formatDate(data.tanggal||new Date()), bahan=getBahanByKode(data.kode);
   if(!bahan) throw new Error('Bahan tidak ditemukan: '+data.kode);
   const sheet=getSheet(SHEETS.TRANSAKSI), vals=sheet.getDataRange().getValues();
@@ -488,6 +567,7 @@ function simpanDistribusiBahan(data) {
 }
 
 function simpanDistribusiBatch(data) {
+  requireAccess_(data && data.accessToken);
   const tgl=formatDate(data.tanggal||new Date());
   const sheet=getSheet(SHEETS.TRANSAKSI);
   const items=data.items||[], op=data.operator||'', now=new Date();
@@ -580,6 +660,7 @@ function getPembayaran(tanggal) {
 }
 
 function catatPembayaran(data) {
+  requireAccess_(data && data.accessToken);
   const tgl=formatDate(data.tanggal);
   hitungUlangPembayaran(tgl);
   const sheet=getSheet(SHEETS.PEMBAYARAN), rows=readSheetAsObjects(SHEETS.PEMBAYARAN);
@@ -704,6 +785,7 @@ function generateLaporanFormatLama(tanggal) {
 // ============================================================
 
 function mulaiSesiTim(data) {
+  requireAccess_(data && data.accessToken);
   if(!data||!data.operator||!String(data.operator).trim()) throw new Error('Nama operator wajib diisi.');
   const tanggal=formatDate(data.tanggal||new Date()), operator=String(data.operator).trim();
   let anggota=(Array.isArray(data.anggota)?data.anggota:[])

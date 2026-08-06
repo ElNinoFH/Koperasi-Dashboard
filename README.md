@@ -10,6 +10,7 @@ Tema visual mengikuti logo (gradasi **ungu–cyan**) dengan sentuhan modern-futu
 
 | Modul | Fungsi |
 |---|---|
+| **Gerbang Kode Akses (PIN)** | Halaman pertama sebelum apa pun lain bisa diakses. Mencegah orang yang sekadar tahu link web app untuk melihat/mengubah data keuangan koperasi (lihat bagian [Keamanan](#-keamanan)). |
 | **Verifikasi Tim Harian** | Sebelum masuk, kasir mencatat siapa **penginput data (operator)** dan **seluruh tim** yang bertugas hari ini. Operator otomatis tergabung dalam daftar tim. |
 | **Dashboard** | Ringkasan penjualan, modal (HPP), laba/rugi, total belanja, grafik distribusi per fase, status pembayaran, dan peringatan stok kritis. |
 | **Transaksi Harian** | Input distribusi bahan ke 9 fase/kelompok (Fase PS, A, B, C, SFS, Makan Malam, Sarapan PJ, Guru, IPAK) dengan kalkulasi harga real-time dan validasi stok. |
@@ -105,14 +106,66 @@ Lalu jalankan `setupDatabase` & buat deployment dari editor.
 
 ## 📖 Alur Pakai Kasir
 
-1. **Buka URL** → muncul halaman verifikasi tim.
-2. Isi **nama penginput data** (operator) → otomatis masuk daftar tim.
-3. Tambah **anggota tim lain** yang bertugas (Enter untuk menambah).
-4. Klik **Masuk Dashboard**.
-5. **Transaksi** → input jumlah distribusi tiap bahan ke tiap fase → **Simpan Laporan**.
-6. **Stok** → input stok masuk / tambah bahan baru bila perlu.
-7. **Dashboard** → cek ringkasan & catat pembayaran tiap fase.
-8. **Laporan** → **Buat Laporan Format Lama** untuk arsip/cetak.
+1. **Buka URL** → muncul **gerbang kode akses (PIN)**.
+2. Masukkan PIN yang benar → muncul halaman verifikasi tim.
+3. Isi **nama penginput data** (operator) → otomatis masuk daftar tim.
+4. Tambah **anggota tim lain** yang bertugas (Enter untuk menambah).
+5. Klik **Masuk Dashboard**.
+6. **Transaksi** → input jumlah distribusi tiap bahan ke tiap fase → **Simpan Laporan**.
+7. **Stok** → input stok masuk / tambah bahan baru bila perlu.
+8. **Dashboard** → cek ringkasan & catat pembayaran tiap fase.
+9. **Laporan** → **Buat Laporan Format Lama** untuk arsip/cetak.
+
+---
+
+## 🔒 Keamanan
+
+Web app ini di-deploy dengan `appsscript.json` → `"access": "ANYONE_ANONYMOUS"`.
+Ini **disengaja** — aplikasi dipakai kasir/tim koperasi lewat link, tanpa
+mengharuskan mereka login akun Google. Konsekuensinya: **siapa pun yang
+tahu link deployment bisa membuka halamannya**, jadi ada lapisan keamanan
+tambahan di level aplikasi:
+
+- **Gerbang PIN**: halaman pertama yang muncul sekarang adalah input kode
+  akses (PIN), sebelum halaman verifikasi tim/dashboard bisa diakses.
+  PIN divalidasi lewat fungsi backend `verifyAccessCode(pin)`, yang
+  mengembalikan token sesi sederhana (disimpan di `CacheService`, berlaku
+  6 jam) bila PIN benar.
+- **Validasi ganda di backend**: fungsi-fungsi yang mengubah data
+  keuangan/stok (`tambahBahan`, `updateBahan`, `catatPembayaran`,
+  `simpanDistribusiBatch`, `simpanDistribusiBahan`, `inputStokMasuk`,
+  `mulaiSesiTim`) juga memvalidasi token sesi tersebut lewat
+  `requireAccess_()` di sisi server — jadi gerbang PIN di frontend tidak
+  bisa dilewati begitu saja lewat console browser.
+- **PIN disimpan di `PropertiesService.getScriptProperties()`**, bukan
+  hardcode di kode, supaya tetap aman meski repo GitHub ini publik.
+
+### PIN default — WAJIB DIGANTI
+
+Saat pertama kali dipakai (belum pernah ada PIN tersimpan), aplikasi
+otomatis memakai **PIN default `1234`**. Ini **BUKAN** PIN yang aman untuk
+produksi — siapa pun yang membaca kode/README ini juga tahu PIN-nya.
+
+**Ganti PIN sebelum dipakai mencatat data keuangan sungguhan**, dengan
+salah satu cara:
+
+1. **Lewat aplikasi**: masuk dengan PIN lama (`1234` bila belum pernah
+   diganti), lalu panggil `changeAccessCode(token, 'pinBaruAnda')` — token
+   didapat otomatis setelah `verifyAccessCode` sukses. (Saat ini belum ada
+   tombol UI khusus untuk ini — bisa dipanggil lewat console browser saat
+   sudah login, atau ditambahkan tombol "Ganti PIN" di pengaturan bila
+   diperlukan.)
+2. **Manual dari editor Apps Script** (paling mudah): buka
+   **Extensions → Apps Script**, lalu jalankan sekali baris berikut lewat
+   fungsi sementara atau langsung di **Execution log**:
+   ```js
+   PropertiesService.getScriptProperties().setProperty('ACCESS_PIN', 'pinBaruAnda');
+   ```
+
+Catatan: PIN ini adalah lapisan keamanan **sederhana** untuk mencegah
+orang iseng yang kebetulan mendapat link, bukan pengganti otentikasi
+sungguhan — jangan bagikan PIN di tempat publik, dan ganti berkala bila
+perlu.
 
 ---
 

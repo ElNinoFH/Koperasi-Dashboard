@@ -358,8 +358,38 @@ body {
   <!-- ===================== TOAST ===================== -->
   <div id="toast" class="toast"></div>
 
+  <!-- ===================== GERBANG KODE AKSES (PIN) ===================== -->
+  <!-- Muncul PALING AWAL, sebelum halaman verifikasi tim / dashboard.
+       Ini lapisan keamanan aplikasi karena web app di-deploy tanpa login
+       Google (access: ANYONE_ANONYMOUS di appsscript.json). -->
+  <section id="page-pin" class="page page-auth">
+    <div class="auth-bg"></div>
+    <div class="auth-card glass">
+      <div class="brand">
+        <div class="brand-logo">
+          <span class="px px1"></span><span class="px px2"></span>
+          <span class="px px3"></span><span class="px px4"></span>
+        </div>
+        <div class="brand-text">
+          <h1>Koperasi Dashboard</h1>
+          <p>Masukkan kode akses untuk melanjutkan</p>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Kode Akses (PIN)</label>
+        <input type="password" id="inputPin" inputmode="numeric" placeholder="••••" autocomplete="off">
+        <small class="hint">Tanya operator/pengurus koperasi bila belum tahu kode akses.</small>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="btnMasukPin">
+        <span>Masuk</span>
+      </button>
+    </div>
+  </section>
+
   <!-- ===================== HALAMAN AUTH TIM ===================== -->
-  <section id="page-auth" class="page page-auth">
+  <section id="page-auth" class="page page-auth hidden">
     <div class="auth-bg"></div>
     <div class="auth-card glass">
       <div class="brand">
@@ -664,6 +694,7 @@ var App = (function () {
   var state = {
     today: null,
     tanggal: null,
+    accessToken: null,   // token sesi PIN, didapat dari verifyAccessCode()
     sesi: null,          // { operator, anggota[] }
     anggotaTetap: [],
     fase: [],
@@ -728,6 +759,9 @@ var App = (function () {
     // Cek apakah berjalan di luar konteks Apps Script (mis. buka HTML langsung).
     if (typeof google === 'undefined' || !google.script) {
       loading(false);
+      // Tidak ada backend untuk divalidasi di mode preview, jadi gerbang
+      // PIN dilewati dan langsung tampilkan halaman verifikasi tim (demo).
+      $('page-pin').classList.add('hidden');
       $('authDate').textContent = '⚠️ Mode Preview — sambungkan ke Apps Script';
       state.fase = ['Fase PS','Fase A','Fase B','Fase C','SFS',
                     'Makan Malam','Sarapan PJ','Guru','IPAK'];
@@ -742,6 +776,47 @@ var App = (function () {
       return;
     }
 
+    // Tampilkan gerbang PIN dulu. Data awal (getInitState) baru diambil
+    // SETELAH PIN benar (lihat loadAfterPin()).
+    loading(false);
+    showPinGate();
+    $('inputPin').focus();
+  }
+
+  // ============================================================
+  //  GERBANG KODE AKSES (PIN)
+  // ============================================================
+  function showPinGate() {
+    $('page-pin').classList.remove('hidden');
+    $('page-auth').classList.add('hidden');
+    $('app-shell').classList.add('hidden');
+  }
+
+  function submitPin() {
+    var pin = ($('inputPin').value || '').trim();
+    if (!pin) { toast('Masukkan kode akses', 'err'); return; }
+    loading(true, 'Memeriksa kode akses…');
+    run('verifyAccessCode', pin).then(function (token) {
+      loading(false);
+      if (!token) {
+        toast('Kode akses salah', 'err');
+        $('inputPin').value = '';
+        $('inputPin').focus();
+        return;
+      }
+      state.accessToken = token;
+      $('inputPin').value = '';
+      loadAfterPin();
+    }).catch(function (e) {
+      loading(false);
+      toast('Gagal memeriksa kode akses: ' + (e.message || e), 'err');
+    });
+  }
+
+  // Dijalankan setelah PIN terverifikasi: ambil data awal lalu tampilkan
+  // halaman verifikasi tim (kalau belum ada sesi hari ini) atau langsung
+  // masuk dashboard (kalau sesi hari ini sudah dibuat).
+  function loadAfterPin() {
     loading(true, 'Menyiapkan aplikasi…');
     run('getInitState').then(function (st) {
       state.today = st.today;
@@ -784,6 +859,7 @@ var App = (function () {
   //  HALAMAN AUTH TIM
   // ============================================================
   function showAuth() {
+    $('page-pin').classList.add('hidden');
     $('page-auth').classList.remove('hidden');
     $('app-shell').classList.add('hidden');
   }
@@ -840,7 +916,7 @@ var App = (function () {
     }
 
     loading(true, 'Menyimpan sesi tim…');
-    run('mulaiSesiTim', { tanggal: state.tanggal, operator: operator, anggota: state.operatorChips })
+    run('mulaiSesiTim', { tanggal: state.tanggal, operator: operator, anggota: state.operatorChips, accessToken: state.accessToken })
       .then(function (sesi) {
         state.sesi = sesi;
         enterApp();
@@ -854,6 +930,7 @@ var App = (function () {
   //  MASUK APLIKASI
   // ============================================================
   function enterApp() {
+    $('page-pin').classList.add('hidden');
     $('page-auth').classList.add('hidden');
     $('app-shell').classList.remove('hidden');
 
@@ -1093,7 +1170,7 @@ var App = (function () {
     if (!items.length) { toast('Tidak ada perubahan untuk disimpan'); return; }
 
     loading(true, 'Menyimpan ' + items.length + ' bahan…');
-    run('simpanDistribusiBatch', { tanggal: state.tanggal, items: items, operator: state.sesi.operator })
+    run('simpanDistribusiBatch', { tanggal: state.tanggal, items: items, operator: state.sesi.operator, accessToken: state.accessToken })
       .then(function (m) {
         state.matriks = m;
         state.dirty = {};
@@ -1225,7 +1302,8 @@ var App = (function () {
       tanggal: state.tanggal, kode: _stokKode,
       masuk: parseFloat($('modalStokMasuk').value) || 0,
       stokAwalOverride: parseFloat($('modalStokAwal').value) || 0,
-      operator: state.sesi.operator
+      operator: state.sesi.operator,
+      accessToken: state.accessToken
     }).then(function (list) {
       state.stok = list;
       renderStok();
@@ -1239,7 +1317,8 @@ var App = (function () {
     var data = {
       nama: $('bahanNama').value, kategori: $('bahanKategori').value,
       satuan: $('bahanSatuan').value, hargaBeli: parseFloat($('bahanHargaBeli').value) || 0,
-      hargaJual: parseFloat($('bahanHargaJual').value) || 0, stokMin: parseFloat($('bahanStokMin').value) || 0
+      hargaJual: parseFloat($('bahanHargaJual').value) || 0, stokMin: parseFloat($('bahanStokMin').value) || 0,
+      accessToken: state.accessToken
     };
     if (!data.nama.trim()) { toast('Nama bahan wajib diisi', 'err'); return; }
     loading(true, 'Menambah bahan…');
@@ -1263,7 +1342,8 @@ var App = (function () {
     loading(true, 'Menyimpan pembayaran…');
     run('catatPembayaran', {
       tanggal: state.tanggal, fase: _bayarFase,
-      dibayar: parseFloat($('bayarDibayar').value) || 0
+      dibayar: parseFloat($('bayarDibayar').value) || 0,
+      accessToken: state.accessToken
     }).then(function () {
       closeModal('modalBayar');
       loadDashboard();
@@ -1338,6 +1418,12 @@ var App = (function () {
   //  EVENT BINDING
   // ============================================================
   function bindGlobalEvents() {
+    // ---- Gerbang PIN ----
+    $('btnMasukPin').addEventListener('click', submitPin);
+    $('inputPin').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); submitPin(); }
+    });
+
     // ---- Auth page ----
     $('inputOperator').addEventListener('change', syncOperatorChip);
     $('inputOperator').addEventListener('blur', syncOperatorChip);
